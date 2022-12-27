@@ -1,0 +1,17 @@
+{
+"Channel":"main",
+"Core":{
+    "tag":"2022-12-27-1",
+    "branch":"main"
+},
+"Portal":{
+    "tag":"2022-12-2X-Y",
+    "branch":"main"
+},
+"PortalAccess":{
+    "tag":"2022-12-2N-M",
+    "branch":"main"
+},
+"ReleaseNotes":"/ReleaseNotes/",
+"AddtoMainDocumentation":true
+}
