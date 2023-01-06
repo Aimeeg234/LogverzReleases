@@ -1,6 +1,7 @@
 ﻿#determine os type AND verify dependencies are present 
 if ($Env:OS -eq "Windows_NT"){
     $OSType="Windows"
+    $gitcommand="git.exe"
     
     $cmdName="7z"
     if (!(Get-Command $cmdName -errorAction SilentlyContinue))
@@ -10,11 +11,11 @@ if ($Env:OS -eq "Windows_NT"){
         exit
     }
 
-
 }
 else{
     $OSType="Linux"
     $cmdName="7za"
+    $gitcommand="git"
     if (!(Get-Command $cmdName -errorAction SilentlyContinue))
     {
         write-host "`n $cmdName dependency not installed, use package manger of your os command for installation example sudo apt install p7zip or sudo yum install p7zip for ubuntu/centos respectively" -ForegroundColor yellow
@@ -25,44 +26,109 @@ else{
 }
 
 #constants
+$ReleaseRepositoryName="LogverzReleases"
 $projectpath="C:\Users\Administrator\Documents\LogverzReleases" # change accroding to local path
 $componentpath=$projectpath+"\LogverzCore"
 $buildrelativepath="ProjectBuild"
 $buildfullpath="$projectpath\$buildrelativepath\build"
+$portalrepobaseurl="https://logleads@dev.azure.com/logleads/LogverzPortal/_git/"
+$corerepobaseurl="https://logleads@dev.azure.com/logleads/LogverzCore/_git/LogverzCore"
 
-$repobaseurl="https://logleads@dev.azure.com/logleads/LogverzPortal/_git/"
+#validating environment
+if (($(test-path $buildfullpath) -eq $false)){
+    New-Item -Path $buildfullpath -ItemType "Directory" -Force
+}
 
 
-#create product bundle (init.zip)
+cd $projectpath
+if (($(test-path $componentpath) -eq $false)){
+    write-host "`n Core Project folder dependency missing, LogverzCore repo must be present, please clone LogverzCore into the Logverz Releases project folder`n" -ForegroundColor yellow
+    Start-Sleep -Seconds 10
+    exit
+}
+
+cd $componentpath
+$gitremoteurl=iex "git config --get remote.origin.url"
+if ($gitremoteurl  -ne $corerepobaseurl){
+   write-host "`n Core Project incorrect reference, LogverzCore folder present but not referencing core project, please clone LogverzCore into the Logverz Releases project folder`n" -ForegroundColor yellow
+   Start-Sleep -Seconds 10
+   exit
+}else{
+   write-host "`n Environment is setup correctly`n" -ForegroundColor green
+}
+
+
 Import-Module $($projectpath+"\LogverzCore\infrastructure\tools\build.psm1") -Verbose:$false
 $extrafiles= get-extrafiles -filepath $($componentpath+"\infrastructure\tools\buildextrafiles.csv")
+$versions=Get-ChildItem $($projectpath+"\Versions") | sort CreationTime -Descending | select name,creationtime |Select -First 2
+$latestversion=$($versions[0].Name).Replace(".json","").Replace("v","")
+$buildparameters=Get-Content $($projectpath+"\Versions\v"+$latestversion+".json")|ConvertFrom-Json
 
-build-webapp-source -builddirectory $buildfullpath -repo $($repobaseurl+"Portal") -appname "Portal" -branchname "dev" -OSType $OSType
-build-webapp-source -builddirectory $buildfullpath -repo $($repobaseurl+"PortalAccess") -appname "PortalAccess" -branchname "dev" -OSType $OSType
+$CoreTag=$buildparameters.Core.tag
+$CoreBranchName=$buildparameters.Core.branch
+$PortalTag=$buildparameters.Portal.tag
+$PortalBranch=$buildparameters.Portal.branch
+$PortalAccessTag=$buildparameters.PortalAccess.tag
+$PortalAccessBranch=$buildparameters.PortalAccess.branch
+$ReleaseTag=$latestversion
 
-set-init-sources -projectpath $projectpath -extrafiles $extrafiles -builddirectory $buildrelativepath -componentpath $componentpath -OSType $OSType
-
-#creating new commit and uploading release. 
-#Broken don't use: Install-Module -Name PSGitHub && Import-Module PSGitHub && Remove-Module PSGitHub && Uninstall-Module PSGitHub
-
+#First time only:
 #Install-Module -Name PowerShellForGitHub
-#Set-GitHubAuthentication
-#automated release management token:
+#[string]$userName = 'AnyUserName'
+#[string]$userPassword = 'specify_GH_accesstoken'
+#[securestring]$secStringPassword = ConvertTo-SecureString $userPassword -AsPlainText -Force
+#[pscredential]$credObject = New-Object System.Management.Automation.PSCredential ($userName, $secStringPassword)
+#Set-GitHubAuthentication -Credential $credObject 
+#Validate that access works:
+#Get-GitHubRepository -RepositoryName LogverzReleases -OwnerName logleads
 
 Import-Module PowerShellForGitHub
-Get-GitHubRepository -RepositoryName LogverzCompendium -OwnerName logleads
 
 
+build-webapp-source -builddirectory $buildfullpath -repositoryurl $($portalrepobaseurl+"Portal")`
+                    -appname "Portal" -branchname $PortalBranch -OSType $OSType  -tag $PortalTag
+
+build-webapp-source -builddirectory $buildfullpath -repositoryurl $($portalrepobaseurl+"PortalAccess")`
+                    -appname "PortalAccess" -branchname $PortalAccessBranch -OSType $OSType  -tag $PortalAccessTag
 
 
+#Import-Module $($projectpath+"\LogverzCore\infrastructure\tools\build.psm1") -Verbose:$false
+set-init-sources -projectpath $projectpath -extrafiles $extrafiles -builddirectory $buildrelativepath -componentpath $componentpath `
+                 -OSType $OSType -repositoryurl $corerepobaseurl -branchname $CoreBranchName -tag $CoreTag
 
-#https://www.powershellgallery.com/packages/PSGitHub/0.15.165/Content/Functions%5CPublic%5CNew-GitHubRelease.ps1
-#https://github.com/deadlydog/New-GitHubRelease
+
+#rename init.zip according to the releasetag. 
+$newname=$("init_v"+$ReleaseTag+".zip")
+Rename-Item -Path $($projectpath+"\"+$buildrelativepath+"\init.zip")  -NewName $newname
+$AssetPath = $($projectpath+"\"+$buildrelativepath+"\"+$newname)
+$ReleaseBody= $(Get-Content -Path $($projectpath+"\ReleaseNotes\v"+$ReleaseTag+".md") -Encoding UTF8 |Out-String)
+
+create-GHRelease -RepositoryName $ReleaseRepositoryName -Tag $ReleaseTag -AssetPath $AssetPath -Body $ReleaseBody
+
 
 
 #temp: 
+#$RepositoryName=$ReleaseRepositoryName 
+#$Tag=$ReleaseTag 
+#$Body=$ReleaseBody
+
+#$branchname=$CoreBranchName
+#$repositoryurl=$corerepobaseurl
 #$builddirectory=$buildrelativepath
-#$projectpath="$componentpath\infrastructure\coturncontrol\"
-#$zipfilename="coturncontrol.zip"
-#$componentpath="/home/ec2-user/7ziptesting/webrtcproxycontrol/"
-#$controlbundle=$($componentpath+$zipfilename)
+#$tag=$CoreTag
+
+#$builddirectory=$buildfullpath
+#$repositoryurl=$($portalrepobaseurl+"Portal") 
+#$appname="Portal"
+#$branchname=$PortalBranch
+#$tag="0.7.0"
+
+<#
+$CoreTag="0.7.0"
+$CoreBranchName="main"
+$PortalTag="0.7.0"
+$PortalBranch="main"
+$PortalAccessTag="0.7.0"
+$PortalAccessBranch="main"
+$ReleaseTag=0.7.0
+#>
